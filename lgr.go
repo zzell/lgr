@@ -3,32 +3,61 @@ package lgr
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
+	"strings"
+	"time"
 )
+
+type level int
+
+const (
+	errorlvl level = iota + 1
+	warnlvl
+	infolvl
+	debuglvl
+	tracelvl
+)
+
+const timestampLayout = "2006/01/02 15:04:05"
+
+var (
+	lvlText = map[level]string{
+		errorlvl: "ERROR",
+		warnlvl:  "WARN",
+		infolvl:  "INFO",
+		debuglvl: "DEBUG",
+		tracelvl: "TRACE",
+	}
+
+	lvlFromText = map[string]level{
+		"ERROR": errorlvl,
+		"WARN":  warnlvl,
+		"INFO":  infolvl,
+		"DEBUG": debuglvl,
+		"TRACE": tracelvl,
+	}
+)
+
+func (l level) text() string { return lvlText[l] }
 
 type (
 	Logger struct {
-		Rotator Rotator
-
+		writer *Writer
 		level  level
-		output output
-		file   *os.File
-		logger *log.Logger
-
-		// prefix []string
-		// forks  []*Logger // contains children and parent forks
+		prefix []string
 	}
 
-	// todo: 0 max size, 0 files, non-existing path etc
+	// todo: 0 max size, 0 backups, non-existing path etc
+	// todo: prettify
+	// todo: prefix separator
 	Config struct {
-		Level  string `json:"level"`  // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"]
-		Output string `json:"output"` // one of ["STDOUT", "FILE"]
-		// todo: prettify
+		Level           string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"]
+		Output          string `json:"output"`           // one of: ["STDOUT", "FILE"]
+		TimestampLayout string `json:"timestamp_layout"` // record prefix time format, default: "2006/01/02 15:04:05"
 
 		// below options are ignored for STDOUT output type
-		Path       string `json:"path"`            // path to logs directory
-		FNameFmt   string `json:"filename_format"` // file name time format (e.g. "2006-Jan-02T15:04:05.999999999.log")
+		Path       string `json:"path"`            // relative path to logs directory
+		FNameFmt   string `json:"filename_format"` // file name time format with extension (e.g. "2006-Jan-02T15:04:05.999999999.log")
 		MaxSizeKB  int    `json:"max_size_kb"`     // file max size
 		MaxBackups int    `json:"max_backups"`     // how many files to keep
 	}
@@ -36,115 +65,88 @@ type (
 
 // NewLogger constructor
 func NewLogger(config *Config) (l *Logger, err error) {
-	var nl = func(f *os.File) *log.Logger {
-		return log.New(f, "", log.LstdFlags)
+	lvl, _ := lvlFromText[config.Level]
+	if lvl == 0 {
+		lvl = tracelvl // trace by default
 	}
 
-	l = &Logger{
-		level:  levelFromText[config.Level],
-		output: outputFromText[config.Output],
-	}
+	w := new(Writer)
+	w.output, _ = outputFromText[config.Output]
 
-	// var err error
-	switch l.output {
+	switch w.output {
 	case stdout:
-		l.file = os.Stdout
-		l.logger = nl(os.Stdout)
+		w.file = os.Stdout
 	case file:
-		l.Rotator, err = NewRotator(config)
+		w.Rotator, err = NewRotator(config)
 		if err != nil {
 			return nil, err
 		}
 
-		l.file, err = l.Rotator.Latest()
+		w.file, err = w.Rotator.LatestOrNew()
 		if err != nil {
 			return nil, err
 		}
-
-		l.logger = nl(l.file)
 	default:
 		return nil, errors.New("illegal output type")
 	}
 
-	return l, nil
+	return &Logger{writer: w, level: lvl, prefix: []string{}}, nil
 }
 
-// func (l *Logger) Fork(prefix string) *Logger {
-// 	l2 := &Logger{
-// 		Rotator: l.Rotator,
-// 		level:   l.level,
-// 		output:  l.output,
-// 		file:    l.file,
-// 		logger:  l.logger,
-// 		prefix:  l.prefix,
-// 		forks:   append(l.forks, l),
-// 	}
-//
-// 	l2.prefix = append(l.prefix, prefix)
-// 	return l2
-// }
+func (l *Logger) Fork(prefix string) *Logger {
+	return &Logger{
+		writer: l.writer,
+		level:  l.level,
+		prefix: append(l.prefix, prefix),
+	}
+}
 
+// TODO: REFACTOR
 func (l *Logger) print(level level, v ...interface{}) {
+	now := time.Now()
+
 	if !l.shouldPrint(level) {
 		return
 	}
 
-	l.preprint()
-	l.logger.Printf(fmt.Sprintf("%s %s", prettify(level.text()), fmt.Sprintln(v...)))
+	var str string
+
+	if len(l.prefix) == 0 {
+		str = fmt.Sprintf("%s %s %s", now.Format(timestampLayout), prettify(level.text()), fmt.Sprintln(v...))
+	} else {
+		str = fmt.Sprintf("%s %s %s: %s", now.Format(timestampLayout), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintln(v...))
+	}
+
+	_, err := l.writer.Write([]byte(str))
+	if err != nil {
+		fmt.Println(err)
+	}
 }
 
+// TODO: REFACTOR
 func (l *Logger) printf(level level, format string, v ...interface{}) {
+	now := time.Now()
+
 	if !l.shouldPrint(level) {
 		return
 	}
 
-	l.preprint()
-	l.logger.Println(fmt.Sprintf("%s %s", prettify(level.text()), fmt.Sprintf(format, v...)))
+	var str string
+
+	if len(l.prefix) == 0 {
+		str = fmt.Sprintf("%s %s %s", now.Format(timestampLayout), prettify(level.text()), fmt.Sprintf(format, v...))
+	} else {
+		str = fmt.Sprintf("%s %s %s: %s", now.Format(timestampLayout), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintf(format, v...))
+	}
+
+	_, err := l.writer.Write([]byte(str))
+	if err != nil {
+		fmt.Println(err)
+	}
 }
 
 func (l *Logger) shouldPrint(level level) bool {
 	return l.level >= level
-}
-
-func (l *Logger) preprint() {
-	if l.output == stdout {
-		return
-	}
-
-	oversized, err := l.Rotator.Oversized(l.file)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	if !oversized {
-		return
-	}
-
-	// for _, l := range l.forks {
-	// 	f, err := l.Rotator.Rotate(l.file)
-	//
-	// 	if err != nil {
-	// 		continue
-	// 	}
-	//
-	// 	l.logger.SetOutput(f)
-	// 	l.file = f
-	// }
-	//
-	// f, err := l.Rotator.Rotate(l.file)
-	// if err != nil {
-	// 	return
-	// }
-
-	f, err := l.Rotator.Rotate(l.file)
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	l.file = f
-	l.logger.SetOutput(f)
 }
 
 func (l *Logger) Error(i ...interface{})            { l.print(errorlvl, i...) }

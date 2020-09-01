@@ -15,7 +15,7 @@ type (
 		Rotate(*os.File) (*os.File, error)
 		Oversized(*os.File) (bool, error)
 		New() (*os.File, error)
-		Latest() (*os.File, error)
+		LatestOrNew() (*os.File, error)
 		Clean() error
 		Tail(int) ([][]byte, error)
 	}
@@ -108,7 +108,7 @@ func (r *rotator) New() (*os.File, error) {
 	return f, err
 }
 
-func (r *rotator) Latest() (*os.File, error) {
+func (r *rotator) LatestOrNew() (*os.File, error) {
 	// directory is empty - creating new file
 	if len(r.fs) == 0 {
 		return r.New()
