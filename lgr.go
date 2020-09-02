@@ -7,49 +7,64 @@ import (
 	"time"
 )
 
-type level int
+// TODO: namings
+// TODO: constructor for writer
+// TODO: Tail([]*os.File, int)
+// TODO: LF CR consts
+
+type Level int
 
 const (
-	errorlvl level = iota + 1
-	warnlvl
-	infolvl
+	tracelvl Level = iota + 1
 	debuglvl
-	tracelvl
+	infolvl
+	warnlvl
+	errorlvl
+)
+
+const (
+	defaultLevel     = tracelvl
+	defaultOutput    = stdout
+	defaultTimestamp = "2006/01/02 15:04:05"
+	defaultSeparator = ": "
 )
 
 var (
-	lvlText = map[level]string{
-		errorlvl: "ERROR",
-		warnlvl:  "WARN",
-		infolvl:  "INFO",
-		debuglvl: "DEBUG",
+	lvlstr = map[Level]string{
 		tracelvl: "TRACE",
+		debuglvl: "DEBUG",
+		infolvl:  "INFO",
+		warnlvl:  "WARN",
+		errorlvl: "ERROR",
 	}
 
-	lvlFromText = map[string]level{
-		"ERROR": errorlvl,
-		"WARN":  warnlvl,
-		"INFO":  infolvl,
-		"DEBUG": debuglvl,
+	strlvl = map[string]Level{
 		"TRACE": tracelvl,
+		"DEBUG": debuglvl,
+		"INFO":  infolvl,
+		"WARN":  warnlvl,
+		"ERROR": errorlvl,
 	}
 )
 
-func (l level) text() string { return lvlText[l] }
+func (l Level) String() string { return lvlstr[l] }
 
 type (
+	PrefixFn func() string
+
 	Logger struct {
-		writer *Writer
-		level  level
-		prefix []string
+		Writer    *Writer
+		Level     Level
+		Prefix    []PrefixFn
+		StampFmt  string
+		Separator string
 	}
 
-	// todo: prettify
-	// todo: prefix separator
 	Config struct {
-		Level           string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] (default: "TRACE")
-		Output          string `json:"output"`           // one of: ["STDOUT", "FILE"] (default: "STDOUT")
-		TimestampLayout string `json:"timestamp_layout"` // record prefix time format (default: "2006/01/02 15:04:05")
+		Level        string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] (default: "TRACE")
+		Output       string `json:"output"`           // one of: ["STDOUT", "FILE"] (default: "STDOUT")
+		TimestampFmt string `json:"timestamp_format"` // timestamp format (default: "2006/01/02 15:04:05")
+		Separator    string `json:"prefix_separator"` // prefix separator (default: ": ")
 
 		// below options are not needed for STDOUT logging
 		Path       string `json:"path"`            // relative path to logs directory (default: ".")
@@ -59,105 +74,135 @@ type (
 	}
 )
 
-const (
-	defaultLevel = tracelvl
-	defaultOutput = stdout
-	defaultTimestamp = "2006/01/02 15:04:05"
-)
+func NewLogger(config *Config) (*Logger, error) {
+	var (
+		lvl    Level
+		ok     bool
+		err    error
+		writer = new(Writer)
+	)
 
-// NewLogger constructor
-func NewLogger(config *Config) (l *Logger, err error) {
 	if config == nil {
 		config = &Config{}
 	}
 
-	lvl, ok := lvlFromText[config.Level]
-	if !ok {
+	if config.Level != "" {
+		lvl, ok = strlvl[config.Level]
+		if !ok {
+			return nil, fmt.Errorf("invalid log level %q", config.Level)
+		}
+	} else {
 		lvl = defaultLevel
 	}
 
-	w := new(Writer)
-	w.output, ok = outputFromText[config.Output]
-	if !ok {
-		w.output = defaultOutput
+	if config.Output != "" {
+		writer.output, ok = stroutput[config.Output]
+		if !ok {
+			return nil, fmt.Errorf("invalid output type %q", config.Output)
+		}
+	} else {
+		writer.output = defaultOutput
 	}
 
-	if config.TimestampLayout == "" {
-		config.TimestampLayout = defaultTimestamp
-	}
-
-	switch w.output {
+	switch writer.output {
 	case stdout:
-		w.file = os.Stdout
+		writer.file = os.Stdout
 	case file:
-		w.Rotator, err = NewRotator(config)
+		writer.Rotator, err = NewRotator(config.Path, config.FNameFmt, config.MaxSizeKB, config.MaxBackups)
 		if err != nil {
 			return nil, err
 		}
 
-		w.file, err = w.Rotator.LatestOrNew()
+		writer.file, err = writer.Rotator.LatestOrNew()
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	return &Logger{writer: w, level: lvl, prefix: []string{}}, nil
-}
+	timestamp := config.TimestampFmt
+	if timestamp == "" {
+		timestamp = defaultTimestamp
+	}
 
-func (l *Logger) Fork(prefix string) *Logger {
+	separator := config.Separator
+	if separator == "" {
+		separator = defaultSeparator
+	}
+
 	return &Logger{
-		writer: l.writer,
-		level:  l.level,
-		prefix: append(l.prefix, prefix),
+		Writer:    writer,
+		Level:     lvl,
+		Prefix:    []PrefixFn{},
+		StampFmt:  timestamp,
+		Separator: separator,
+	}, nil
+}
+
+func (l *Logger) Fork(fn PrefixFn) *Logger {
+	return &Logger{
+		Writer:    l.Writer,
+		Level:     l.Level,
+		Prefix:    append(l.Prefix, fn),
+		StampFmt:  l.StampFmt,
+		Separator: l.Separator,
 	}
 }
 
-// TODO: REFACTOR
-func (l *Logger) print(level level, v ...interface{}) {
-	now := time.Now()
+const noPrefixLogFmt = "%s %s %s"   // timestamp level log
+const prefixLogFmt = "%s %s %s: %s" // timestamp level prefix: log
 
+func (l *Logger) fmt(level Level, format string, v ...interface{}) []byte {
+	var (
+		now    = time.Now()
+		logfmt string
+		values = []interface{}{
+			now.Format(l.StampFmt),
+			level.String(),
+		}
+	)
+
+	if len(l.Prefix) == 0 {
+		logfmt = noPrefixLogFmt
+	} else {
+		logfmt = prefixLogFmt
+
+		prfxs := make([]string, 0, len(l.Prefix))
+		for _, p := range l.Prefix {
+			prfxs = append(prfxs, p())
+		}
+
+		values = append(values, strings.Join(prfxs, l.Separator))
+	}
+
+	if format != "" {
+		values = append(values, fmt.Sprintf(format, v...))
+	} else {
+		values = append(values, fmt.Sprintln(v...))
+	}
+
+	return []byte(fmt.Sprintf(logfmt, values...))
+}
+
+func (l *Logger) print(level Level, v ...interface{}) {
 	if !l.shouldPrint(level) {
 		return
 	}
 
-	var str string
-
-	if len(l.prefix) == 0 {
-		str = fmt.Sprintf("%s %s %s", now.Format(defaultTimestamp), prettify(level.text()), fmt.Sprintln(v...))
-	} else {
-		str = fmt.Sprintf("%s %s %s: %s", now.Format(defaultTimestamp), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintln(v...))
-	}
-
-	_, err := l.writer.Write([]byte(str))
+	_, err := l.Writer.Write(l.fmt(level, "", v...))
 	if err != nil {
 		fmt.Println(err)
 	}
 }
 
-// TODO: REFACTOR
-func (l *Logger) printf(level level, format string, v ...interface{}) {
-	now := time.Now()
-
+func (l *Logger) printf(level Level, format string, v ...interface{}) {
 	if !l.shouldPrint(level) {
 		return
 	}
 
-	var str string
-
-	if len(l.prefix) == 0 {
-		str = fmt.Sprintf("%s %s %s", now.Format(defaultTimestamp), prettify(level.text()), fmt.Sprintf(format, v...))
-	} else {
-		str = fmt.Sprintf("%s %s %s: %s", now.Format(defaultTimestamp), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintf(format, v...))
-	}
-
-	_, err := l.writer.Write([]byte(str))
+	_, err := l.Writer.Write(l.fmt(level, format, v...))
 	if err != nil {
 		fmt.Println(err)
 	}
-}
-
-func (l *Logger) shouldPrint(level level) bool {
-	return l.level >= level
 }
 
 func (l *Logger) Error(i ...interface{})            { l.print(errorlvl, i...) }
@@ -169,12 +214,6 @@ func (l *Logger) Infof(s string, i ...interface{})  { l.printf(infolvl, s, i...)
 func (l *Logger) Debug(i ...interface{})            { l.print(debuglvl, i...) }
 func (l *Logger) Debugf(s string, i ...interface{}) { l.printf(debuglvl, s, i...) }
 
-const chars = 5
-
-func prettify(level string) string {
-	if len(level) < chars {
-		return level + " "
-	}
-
-	return level
+func (l *Logger) shouldPrint(level Level) bool {
+	return l.Level <= level
 }

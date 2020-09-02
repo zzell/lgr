@@ -39,14 +39,14 @@ type (
 // NewRotator constructor
 //
 // Reads directory from config, parses it's files as a time format and sorts.
-// If directory does not exist it will be created.
-func NewRotator(config *Config) (Rotator, error) {
+// If directory does not exist it will be created as well as a file.
+func NewRotator(path, format string, maxSizeKB, maxBackups int) (Rotator, error) {
 	r := &rotator{
-		fs: make([]time.Time, 0),
-		path:       config.Path,
-		format:     config.FNameFmt,
-		maxSizeKB:  config.MaxSizeKB,
-		maxBackups: config.MaxBackups,
+		fs:         make([]time.Time, 0),
+		path:       path,
+		format:     format,
+		maxSizeKB:  maxSizeKB,
+		maxBackups: maxBackups,
 	}
 
 	if r.path == "" {

@@ -18,7 +18,7 @@ const (
 	file
 )
 
-var outputFromText = map[string]output{
+var stroutput = map[string]output{
 	"STDOUT": stdout,
 	"FILE":   file,
 }
