@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+const (
+	defaultPath       = "."
+	defaultFormat     = "2006-Jan-02T15:04:05.999999999.log"
+	defaultMaxSizeKB  = 1000
+	defaultMaxBackups = 1
+)
+
 type (
 	// Rotator describes log files rotation, backup, cleaning and tailing
 	Rotator interface {
@@ -30,13 +37,32 @@ type (
 )
 
 // NewRotator constructor
+//
+// Reads directory from config, parses it's files as a time format and sorts.
+// If directory does not exist it will be created.
 func NewRotator(config *Config) (Rotator, error) {
 	r := &rotator{
-		fs:         make([]time.Time, 0),
+		fs: make([]time.Time, 0),
 		path:       config.Path,
 		format:     config.FNameFmt,
 		maxSizeKB:  config.MaxSizeKB,
 		maxBackups: config.MaxBackups,
+	}
+
+	if r.path == "" {
+		r.path = defaultPath
+	}
+
+	if r.format == "" {
+		r.format = defaultFormat
+	}
+
+	if r.maxSizeKB == 0 {
+		r.maxSizeKB = defaultMaxSizeKB
+	}
+
+	if r.maxBackups == 0 {
+		r.maxBackups = defaultMaxBackups
 	}
 
 	dir, err := ioutil.ReadDir(r.path)
@@ -79,7 +105,6 @@ func (r *rotator) Less(i, j int) bool {
 func (r *rotator) Rotate(f *os.File) (*os.File, error) {
 	_ = f.Close()
 
-	// todo: remove clean from here
 	if err := r.Clean(); err != nil {
 		return nil, err
 	}

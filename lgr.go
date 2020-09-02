@@ -1,7 +1,6 @@
 package lgr
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -17,8 +16,6 @@ const (
 	debuglvl
 	tracelvl
 )
-
-const timestampLayout = "2006/01/02 15:04:05"
 
 var (
 	lvlText = map[level]string{
@@ -47,31 +44,47 @@ type (
 		prefix []string
 	}
 
-	// todo: 0 max size, 0 backups, non-existing path etc
 	// todo: prettify
 	// todo: prefix separator
 	Config struct {
-		Level           string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"]
-		Output          string `json:"output"`           // one of: ["STDOUT", "FILE"]
-		TimestampLayout string `json:"timestamp_layout"` // record prefix time format, default: "2006/01/02 15:04:05"
+		Level           string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] (default: "TRACE")
+		Output          string `json:"output"`           // one of: ["STDOUT", "FILE"] (default: "STDOUT")
+		TimestampLayout string `json:"timestamp_layout"` // record prefix time format (default: "2006/01/02 15:04:05")
 
-		// below options are ignored for STDOUT output type
-		Path       string `json:"path"`            // relative path to logs directory
-		FNameFmt   string `json:"filename_format"` // file name time format with extension (e.g. "2006-Jan-02T15:04:05.999999999.log")
-		MaxSizeKB  int    `json:"max_size_kb"`     // file max size
-		MaxBackups int    `json:"max_backups"`     // how many files to keep
+		// below options are not needed for STDOUT logging
+		Path       string `json:"path"`            // relative path to logs directory (default: ".")
+		FNameFmt   string `json:"filename_format"` // file name time format with extension (default: "2006-Jan-02T15:04:05.999999999.log")
+		MaxSizeKB  int    `json:"max_size_kb"`     // file max size before rotation (default: 1000)
+		MaxBackups int    `json:"max_backups"`     // how many files to keep (default: 1)
 	}
+)
+
+const (
+	defaultLevel = tracelvl
+	defaultOutput = stdout
+	defaultTimestamp = "2006/01/02 15:04:05"
 )
 
 // NewLogger constructor
 func NewLogger(config *Config) (l *Logger, err error) {
-	lvl, _ := lvlFromText[config.Level]
-	if lvl == 0 {
-		lvl = tracelvl // trace by default
+	if config == nil {
+		config = &Config{}
+	}
+
+	lvl, ok := lvlFromText[config.Level]
+	if !ok {
+		lvl = defaultLevel
 	}
 
 	w := new(Writer)
-	w.output, _ = outputFromText[config.Output]
+	w.output, ok = outputFromText[config.Output]
+	if !ok {
+		w.output = defaultOutput
+	}
+
+	if config.TimestampLayout == "" {
+		config.TimestampLayout = defaultTimestamp
+	}
 
 	switch w.output {
 	case stdout:
@@ -86,8 +99,6 @@ func NewLogger(config *Config) (l *Logger, err error) {
 		if err != nil {
 			return nil, err
 		}
-	default:
-		return nil, errors.New("illegal output type")
 	}
 
 	return &Logger{writer: w, level: lvl, prefix: []string{}}, nil
@@ -112,9 +123,9 @@ func (l *Logger) print(level level, v ...interface{}) {
 	var str string
 
 	if len(l.prefix) == 0 {
-		str = fmt.Sprintf("%s %s %s", now.Format(timestampLayout), prettify(level.text()), fmt.Sprintln(v...))
+		str = fmt.Sprintf("%s %s %s", now.Format(defaultTimestamp), prettify(level.text()), fmt.Sprintln(v...))
 	} else {
-		str = fmt.Sprintf("%s %s %s: %s", now.Format(timestampLayout), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintln(v...))
+		str = fmt.Sprintf("%s %s %s: %s", now.Format(defaultTimestamp), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintln(v...))
 	}
 
 	_, err := l.writer.Write([]byte(str))
@@ -134,9 +145,9 @@ func (l *Logger) printf(level level, format string, v ...interface{}) {
 	var str string
 
 	if len(l.prefix) == 0 {
-		str = fmt.Sprintf("%s %s %s", now.Format(timestampLayout), prettify(level.text()), fmt.Sprintf(format, v...))
+		str = fmt.Sprintf("%s %s %s", now.Format(defaultTimestamp), prettify(level.text()), fmt.Sprintf(format, v...))
 	} else {
-		str = fmt.Sprintf("%s %s %s: %s", now.Format(timestampLayout), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintf(format, v...))
+		str = fmt.Sprintf("%s %s %s: %s", now.Format(defaultTimestamp), prettify(level.text()), strings.Join(l.prefix, " | "), fmt.Sprintf(format, v...))
 	}
 
 	_, err := l.writer.Write([]byte(str))
