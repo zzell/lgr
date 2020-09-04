@@ -9,16 +9,17 @@ import (
 
 // TODO: Archive old log files
 
-type Level int
+type level int
 
 const (
-	tracelvl Level = iota + 1
+	tracelvl level = iota + 1
 	debuglvl
 	infolvl
 	warnlvl
 	errorlvl
 )
 
+// logger defaults
 const (
 	defaultLevel     = tracelvl
 	defaultOutput    = stdout
@@ -27,7 +28,7 @@ const (
 )
 
 var (
-	lvlstr = map[Level]string{
+	lvlstr = map[level]string{
 		tracelvl: "TRACE",
 		debuglvl: "DEBUG",
 		infolvl:  "INFO",
@@ -35,7 +36,7 @@ var (
 		errorlvl: "ERROR",
 	}
 
-	strlvl = map[string]Level{
+	strlvl = map[string]level{
 		"TRACE": tracelvl,
 		"DEBUG": debuglvl,
 		"INFO":  infolvl,
@@ -44,26 +45,29 @@ var (
 	}
 )
 
-func (l Level) String() string { return lvlstr[l] }
+func (l level) String() string { return lvlstr[l] }
 
 type (
+	// PrefixFn result prepends as a prefix of the forked logger.
+	// It might be handy in case if it's needed to add number of goroutines, filename, CPU usage etc.
 	PrefixFn func() string
 
 	Logger struct {
 		Writer    *Writer
-		Level     Level
+		Level     level
 		Prefix    []PrefixFn
 		StampFmt  string
 		Separator string
 	}
 
+	// Config contains logger's options
 	Config struct {
 		Level        string `json:"level"`            // one of: ["ERROR", "WARN", "INFO", "DEBUG", "TRACE"] (default: "TRACE")
 		Output       string `json:"output"`           // one of: ["STDOUT", "FILE"] (default: "STDOUT")
 		TimestampFmt string `json:"timestamp_format"` // timestamp format (default: "2006/01/02 15:04:05")
 		Separator    string `json:"prefix_separator"` // prefix separator (default: ": ")
 
-		// below options are not needed for STDOUT logging
+		// below options are not needed for STDOUT logging:
 		Path       string `json:"path"`            // relative path to logs directory (default: ".")
 		FNameFmt   string `json:"filename_format"` // file name time format with extension (default: "2006-Jan-02T15:04:05.999999999.log")
 		MaxSizeKB  int    `json:"max_size_kb"`     // file max size before rotation (default: 1000)
@@ -71,9 +75,12 @@ type (
 	}
 )
 
+// NewLogger constructor
+//
+// Config might be nil, empty struct, or contain only needed options
 func NewLogger(config *Config) (*Logger, error) {
 	var (
-		lvl     Level
+		lvl     level
 		ok      bool
 		err     error
 		out     output
@@ -134,6 +141,7 @@ func NewLogger(config *Config) (*Logger, error) {
 	}, nil
 }
 
+// Fork creates logger's copy with custom prefix
 func (l *Logger) Fork(fn PrefixFn) *Logger {
 	return &Logger{
 		Writer:    l.Writer,
@@ -144,10 +152,19 @@ func (l *Logger) Fork(fn PrefixFn) *Logger {
 	}
 }
 
+// Tail reads last N lines from log files
+func (l *Logger) Tail(lines int) ([]string, error) {
+	if l.Writer.output == stdout {
+		return nil, errors.New("STDOUT does not support tailing")
+	}
+
+	return TailMany(l.Writer.rotator.Files(), lines)
+}
+
 const noPrefixLogFmt = "%s %s %s"   // timestamp level log
 const prefixLogFmt = "%s %s %s: %s" // timestamp level prefix: log
 
-func (l *Logger) fmt(level Level, format string, v ...interface{}) []byte {
+func (l *Logger) fmt(level level, format string, v ...interface{}) []byte {
 	var (
 		now    = time.Now()
 		logfmt string
@@ -179,7 +196,7 @@ func (l *Logger) fmt(level Level, format string, v ...interface{}) []byte {
 	return []byte(fmt.Sprintf(logfmt, values...))
 }
 
-func (l *Logger) print(level Level, v ...interface{}) {
+func (l *Logger) print(level level, v ...interface{}) {
 	if !l.shouldPrint(level) {
 		return
 	}
@@ -190,7 +207,7 @@ func (l *Logger) print(level Level, v ...interface{}) {
 	}
 }
 
-func (l *Logger) printf(level Level, format string, v ...interface{}) {
+func (l *Logger) printf(level level, format string, v ...interface{}) {
 	if !l.shouldPrint(level) {
 		return
 	}
@@ -199,14 +216,6 @@ func (l *Logger) printf(level Level, format string, v ...interface{}) {
 	if err != nil {
 		fmt.Println(err)
 	}
-}
-
-func (l *Logger) Tail(lines int) ([]string, error) {
-	if l.Writer.output == stdout {
-		return nil, errors.New("STDOUT does not support tailing")
-	}
-
-	return TailMany(l.Writer.rotator.Files(), lines)
 }
 
 func (l *Logger) Error(i ...interface{})            { l.print(errorlvl, i...) }
@@ -218,6 +227,6 @@ func (l *Logger) Infof(s string, i ...interface{})  { l.printf(infolvl, s, i...)
 func (l *Logger) Debug(i ...interface{})            { l.print(debuglvl, i...) }
 func (l *Logger) Debugf(s string, i ...interface{}) { l.printf(debuglvl, s, i...) }
 
-func (l *Logger) shouldPrint(level Level) bool {
+func (l *Logger) shouldPrint(level level) bool {
 	return l.Level <= level
 }

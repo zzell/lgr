@@ -11,6 +11,8 @@ const (
 	CR byte = 13 // Carriage Return '\r'
 )
 
+// TailMany the same as Tail but reads from multiple files.
+// Files should be sorted in ASC.
 func TailMany(files []string, n int) (ss []string, err error) {
 	if len(files) == 0 || n == 0 {
 		return ss, nil
@@ -43,6 +45,7 @@ func TailMany(files []string, n int) (ss []string, err error) {
 	}
 }
 
+// Tail reads last N lites from file
 func Tail(file *os.File, n int) (records []string, err error) {
 	stat, err := file.Stat()
 	if err != nil {

@@ -21,9 +21,9 @@ type (
 		Rotate(*os.File) (*os.File, error)
 		Oversized(*os.File) (bool, error)
 		New() (*os.File, error)
-		File() (*os.File, error) // todo: bad name
-		Clean() error
+		File() (*os.File, error)
 		Files() []string
+		Clean() error
 	}
 
 	rotator struct {
