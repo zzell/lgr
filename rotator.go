@@ -1,7 +1,6 @@
 package lgr
 
 import (
-	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -22,9 +21,9 @@ type (
 		Rotate(*os.File) (*os.File, error)
 		Oversized(*os.File) (bool, error)
 		New() (*os.File, error)
-		LatestOrNew() (*os.File, error)
+		File() (*os.File, error) // todo: bad name
 		Clean() error
-		Tail(int) ([][]byte, error)
+		Files() []string
 	}
 
 	rotator struct {
@@ -121,6 +120,16 @@ func (r *rotator) Oversized(f *os.File) (bool, error) {
 	return stat.Size()/1024 >= int64(r.maxSizeKB), nil
 }
 
+func (r *rotator) Files() []string {
+	var files = make([]string, 0, r.Len())
+
+	for _, f := range r.fs {
+		files = append(files, filepath.Join(r.path, f.Format(r.format)))
+	}
+
+	return files
+}
+
 func (r *rotator) New() (*os.File, error) {
 	var now = time.Now()
 
@@ -133,7 +142,7 @@ func (r *rotator) New() (*os.File, error) {
 	return f, err
 }
 
-func (r *rotator) LatestOrNew() (*os.File, error) {
+func (r *rotator) File() (*os.File, error) {
 	// directory is empty - creating new file
 	if len(r.fs) == 0 {
 		return r.New()
@@ -159,93 +168,4 @@ func (r *rotator) Clean() error {
 	}
 
 	return nil
-}
-
-func (r *rotator) Tail(n int) ([][]byte, error) {
-	if r.Len() == 0 || n == 0 {
-		return make([][]byte, 0), nil
-	}
-
-	var (
-		left = n
-		recs = make([][]byte, 0)
-	)
-
-	for i := 0; ; i++ {
-		if r.Len() == i {
-			return recs, nil
-		}
-
-		f, err := os.Open(filepath.Join(r.path, r.fs[i].Format(r.format)))
-		if err != nil {
-			return nil, err
-		}
-
-		records, err := tail(f, left)
-		if err != nil {
-			return nil, err
-		}
-
-		_ = f.Close()
-
-		recs = append(records, recs...)
-		if len(records) < left {
-			left -= len(records)
-			continue
-		}
-
-		return recs, nil
-	}
-}
-
-func tail(file *os.File, n int) (records [][]byte, err error) {
-	stat, err := file.Stat()
-	if err != nil {
-		return
-	}
-
-	if stat.Size() == 0 {
-		return nil, nil
-	}
-
-	line := make([]byte, 0)
-
-	// default logger prints newline character at the end of a file
-	// https://golang.org/pkg/log/#Logger.Output
-	//
-	// '-1' - latest char in the file (which is '\n')
-	// '-2' - the second char after the last one
-	for cursor, index := -2, 0; ; cursor-- {
-		_, err = file.Seek(int64(cursor), io.SeekEnd)
-		if err != nil {
-			return
-		}
-
-		var char = make([]byte, 1)
-		_, err = file.Read(char)
-		if err != nil {
-			return
-		}
-
-		// newline
-		if char[0] == 10 || char[0] == 13 {
-			index++
-			records = append([][]byte{line}, records...)
-
-			// enough lines, we are done
-			if index == n {
-				return
-			}
-
-			line = make([]byte, 0)
-			continue
-		}
-
-		line = append(char, line...)
-
-		// beginning of the file, but not enough lines
-		if int64(cursor) == -stat.Size() {
-			return append([][]byte{line}, records...), nil
-		}
-	}
 }

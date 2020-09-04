@@ -6,11 +6,6 @@ import (
 	"sync"
 )
 
-const (
-	LF byte = 10 // Line Feed '\n'
-	CR byte = 13 // Carriage Return '\r'
-)
-
 type output int
 
 const (
@@ -24,11 +19,34 @@ var stroutput = map[string]output{
 }
 
 type Writer struct {
-	Rotator
+	rotator Rotator
+	mx      sync.Mutex
+	file    *os.File
+	output  output
+}
 
-	mx     sync.Mutex
-	file   *os.File
-	output output
+func NewWriter(rotator Rotator, out output) (w *Writer, err error) {
+	var f *os.File
+
+	if rotator == nil && out == file {
+		return nil, errors.New("invalid writer args: FILE output requires Rotator's instance")
+	}
+
+	if rotator == nil {
+		f = os.Stdout
+	} else {
+		f, err = rotator.File()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return &Writer{
+		rotator: rotator,
+		mx:      sync.Mutex{},
+		file:    f,
+		output:  out,
+	}, err
 }
 
 func (w *Writer) Write(b []byte) (n int, err error) {
@@ -59,7 +77,7 @@ func (w *Writer) rotate() error {
 		return nil
 	}
 
-	oversized, err := w.Oversized(w.file)
+	oversized, err := w.rotator.Oversized(w.file)
 	if err != nil {
 		return err
 	}
@@ -68,7 +86,7 @@ func (w *Writer) rotate() error {
 		return nil
 	}
 
-	f, err := w.Rotate(w.file)
+	f, err := w.rotator.Rotate(w.file)
 	if err != nil {
 		return nil
 	}

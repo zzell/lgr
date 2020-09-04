@@ -1,16 +1,13 @@
 package lgr
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 )
 
-// TODO: namings
-// TODO: constructor for writer
-// TODO: Tail([]*os.File, int)
-// TODO: LF CR consts
+// TODO: Archive old log files
 
 type Level int
 
@@ -76,47 +73,46 @@ type (
 
 func NewLogger(config *Config) (*Logger, error) {
 	var (
-		lvl    Level
-		ok     bool
-		err    error
-		writer = new(Writer)
+		lvl     Level
+		ok      bool
+		err     error
+		out     output
+		writer  *Writer
+		rotator Rotator = nil
 	)
 
 	if config == nil {
 		config = &Config{}
 	}
 
-	if config.Level != "" {
+	if config.Level == "" {
+		lvl = defaultLevel
+	} else {
 		lvl, ok = strlvl[config.Level]
 		if !ok {
 			return nil, fmt.Errorf("invalid log level %q", config.Level)
 		}
-	} else {
-		lvl = defaultLevel
 	}
 
-	if config.Output != "" {
-		writer.output, ok = stroutput[config.Output]
+	if config.Output == "" {
+		out = defaultOutput
+	} else {
+		out, ok = stroutput[config.Output]
 		if !ok {
 			return nil, fmt.Errorf("invalid output type %q", config.Output)
 		}
-	} else {
-		writer.output = defaultOutput
 	}
 
-	switch writer.output {
-	case stdout:
-		writer.file = os.Stdout
-	case file:
-		writer.Rotator, err = NewRotator(config.Path, config.FNameFmt, config.MaxSizeKB, config.MaxBackups)
+	if out == file {
+		rotator, err = NewRotator(config.Path, config.FNameFmt, config.MaxSizeKB, config.MaxBackups)
 		if err != nil {
 			return nil, err
 		}
+	}
 
-		writer.file, err = writer.Rotator.LatestOrNew()
-		if err != nil {
-			return nil, err
-		}
+	writer, err = NewWriter(rotator, out)
+	if err != nil {
+		return nil, err
 	}
 
 	timestamp := config.TimestampFmt
@@ -203,6 +199,14 @@ func (l *Logger) printf(level Level, format string, v ...interface{}) {
 	if err != nil {
 		fmt.Println(err)
 	}
+}
+
+func (l *Logger) Tail(lines int) ([]string, error) {
+	if l.Writer.output == stdout {
+		return nil, errors.New("STDOUT does not support tailing")
+	}
+
+	return TailMany(l.Writer.rotator.Files(), lines)
 }
 
 func (l *Logger) Error(i ...interface{})            { l.print(errorlvl, i...) }
